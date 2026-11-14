@@ -312,12 +312,23 @@ $("refreshBtn").addEventListener("click", () => { render(); $("status").textCont
 /* ---------- 真扫描：HTTP 存活探测 + 快照确认 ---------- */
 let scanning = false;
 function probeAlive(ip, port, timeout) {
+  // 两条路赛跑：fetch 拿到不透明响应 = 在线；或图片请求快速报错 = 主机在（连接被拒/有应答都会快速失败）
+  // https 页面里 fetch 局域网 http 会被混合内容规则拦死，此时靠图片计时兜底；迟迟无反应 = 没有这台主机
   return new Promise(res => {
+    let done = false;
+    const finish = v => { if (!done) { done = true; res(v); } };
+    const limit = timeout || 900;
     const ctrl = new AbortController();
-    const to = setTimeout(() => { ctrl.abort(); res(false); }, timeout || 900);
+    const to = setTimeout(() => { ctrl.abort(); }, limit);
     fetch("http://" + ip + ":" + port + "/", { mode: "no-cors", signal: ctrl.signal, cache: "no-store" })
-      .then(() => { clearTimeout(to); res(true); })
-      .catch(() => { clearTimeout(to); res(false); });
+      .then(() => { clearTimeout(to); finish(true); })
+      .catch(() => { clearTimeout(to); });
+    const t0 = performance.now();
+    const im = new Image();
+    const ito = setTimeout(() => { im.src = ""; finish(false); }, limit + 600);
+    im.onload = () => { clearTimeout(ito); finish(true); };
+    im.onerror = () => { clearTimeout(ito); finish(performance.now() - t0 < 650); };
+    im.src = "http://" + ip + ":" + port + "/favicon.ico?_p=" + Date.now() + Math.floor(Math.random() * 1e6);
   });
 }
 function probeImage(url, timeout) {
@@ -367,16 +378,15 @@ function renderFound(found) {
 }
 $("scanBtn").addEventListener("click", async () => {
   if (scanning) return;
-  let base = "";
-  if (devices.length && devices[0].ip) {
+  let base = localStorage.getItem("lancamera_last_seg") || "";
+  if (!base && devices.length && devices[0].ip) {
     const p = devices[0].ip.split(".");
     if (p.length === 4) base = p.slice(0, 3).join(".");
   }
-  if (!base) {
-    const inp = prompt("输入要扫描的网段前三段（如你家路由器是 192.168.1.1 就填 192.168.1）：", "192.168.1");
-    if (!inp) return;
-    base = inp.trim();
-  }
+  const inp = prompt("输入要扫描的网段前三段（摄像头 IP 是 192.168.200.x 就填 192.168.200）：", base || "192.168.1");
+  if (!inp) return;
+  base = inp.trim();
+  localStorage.setItem("lancamera_last_seg", base);
   scanning = true;
   const status = $("status");
   const found = [];
@@ -390,7 +400,7 @@ $("scanBtn").addEventListener("click", async () => {
       const ip = queue.shift();
       done++;
       if (done % 8 === 0) status.textContent = "扫描中 " + done + "/254，已发现 " + found.length + " 台…";
-      if (await probeAlive(ip, 80, 850)) {
+      if ((await probeAlive(ip, 80, 850)) || (await probeAlive(ip, 8899, 700))) {
         const c = await classify(ip);
         found.push({ ip: ip, kind: c.kind, brand: c.brand, note: c.note });
         found.sort((a, b) => a.ip.localeCompare(b.ip, undefined, { numeric: true }));
@@ -404,7 +414,7 @@ $("scanBtn").addEventListener("click", async () => {
   scanning = false;
   status.textContent = found.length
     ? "扫描完成：发现 " + found.length + " 台在线设备。绿色是能直接出图的摄像头；其余点「添加」后在设备卡里填账号密码验证。"
-    : "扫描完成：一台都没探到。可能原因：手机和摄像头不在同一 Wi-Fi、路由器开了设备隔离、或浏览器拦截了本地请求——这种情况用「手动添加」填 IP。";
+    : "扫描完成：一台都没探到。逐个查：①网段填对了吗（摄像头是 192.168.200.x 就必须填 192.168.200）；②手机 Wi-Fi 是不是连在摄像头同一个网络；③路由器有没有开设备隔离。排除后还不行就用「手动添加」填 IP。";
 });
 
 /* ---------- 离线缓存（打开一次后断网可用） ---------- */

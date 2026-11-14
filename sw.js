@@ -1,4 +1,4 @@
-const CACHE = "lancamera-web-v1";
+const CACHE = "lancamera-web-v2";
 const SHELL = ["./", "./index.html", "./icon.png", "./manifest.webmanifest"];
 self.addEventListener("install", e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL)).then(() => self.skipWaiting()));
